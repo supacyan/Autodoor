@@ -14,9 +14,10 @@ SoftwareSerial XBee(2, 3); // RX, TX
 // Debug Toggle
 #define DEBUG true
 
-// Lock angle definitions
-#define LOCK            100
-#define UNLOCK          0
+// Lock angle definitions (Positional Rotation Servo has a range of 0-180 degree)
+// Need to eyeball the angle: 0 to 180 direction is clockwise
+#define LOCK            35
+#define UNLOCK          160
 
 // Time Definitions
 #define SYS_WAIT	1000        // Short pause to allow system to catch up	
@@ -61,9 +62,9 @@ int xbee_locc = 7;          // XBee ctrl pin   DI11 xbee_pin 07
 int lock_status;            // Variable for lock status
 int pot_val = -1;           // variable to read the value from the analog pin 
 int pot_mid = 190;          // pot variable for calibrate bidirectional
-int pot_lock = 250;         // pot value for lock
-int pot_unlock = 0;         // pot value for unlock
-int pot_tole = 100;         // pot variable for pot tolerance
+int pot_lock = 250;         // pot value for lock (value does not matter)
+int pot_unlock = 0;         // pot value for unlock (value does not matter)
+int pot_tole = 100;         // pot tolerance in 0 - 250 (range for 100 degree so)
 int duration, distance;     // Ultrasonic unlock sensor
 bool door_status = true;    // door detector value
 int gc = 30;                // global counter for door timeout
