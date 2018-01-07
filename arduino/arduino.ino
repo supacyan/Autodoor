@@ -19,16 +19,16 @@ SoftwareSerial XBee(2, 3); // RX, TX
 #define UNLOCK          0
 
 // Time Definitions
-#define SYS_WAIT	1000        // Short pasue to allow system to catch up	
+#define SYS_WAIT	1000        // Short pause to allow system to catch up	
 #define RUN_WAIT	400         // Time to wait before starting loop again
 #define CAL_WAIT	1500        // Time to wait for the calibrator
 #define DSR_WAIT	500         // Delay before locking after the door sensor is triggered
 #define AFT_WAIT	1000        // Time to wait to allow doorlock to complete its task
 #define ERR_WAIT	1000        // Time to wait to redo after ERROR
-#define STAT_WAIT	100         // Time to wait to redo befro read the pot in lock_status()
+#define STAT_WAIT	100         // Time to wait to redo befor read the pot in lock_stat()
 
 // Functions declarations
-extern int lock_status();
+extern int lock_stat();
 extern int lock(int lock_pos);
 extern void print_info();
 extern void calibrate();
@@ -42,19 +42,23 @@ extern void xbee_update();
 extern void melody_tone();
 
 // Pinout
-int led_pin = 10;           // LED connected to digital pin 10 (PWM)
 int servo_pin = 9;          // Digital pin to control the servo
-int pot_pin = A0;           // analog pin used to connect the potentiometer
+int pot_pin = A5;           // analog pin used to connect the potentiometer
 int trig_pin = 12;          // Ultrasonic sensor trig singal out 
 int echo_pin = 11;          // ultrasonic sensor echo singal in 
 int buzzer_pin = 8;         // buzzer pin
-int buzzer_gnd = 7;         // buzzer GND
+int buzzer_gnd = 10;        // buzzer GND
 int door_pin = 13;          // door detector pin
-int xbee_door = 6;          // XBee door pin   DIO4 xbee_pin 11    
-int xbee_obj = 5;           // XBee object pin DIO7 xbee_pin 12        
+int xbee_door = 6;          // XBee door pin   DIO04 xbee_pin 11    
+int xbee_obj = 5;           // XBee object pin DIO07 xbee_pin 12        
+int xbee_lock = 4;          // XBee lock pin   DIO09 xbee_pin 13        
+int xbee_buzz = A3;         // XBee buzz pin   DIO03 xbee_pin 17
+int xbee_net = A2;          // XBee net pin    DIO05 xbee_pin 15
+int xbee_master = A1;       // XBee master pin DIO06 xbee_pin 16
+int xbee_locc = 7;          // XBee ctrl pin   DI11 xbee_pin 07
 
 // Variable declearation
-int stat;                   // Variable for lock status
+int lock_status;            // Variable for lock status
 int pot_val = -1;           // variable to read the value from the analog pin 
 int pot_mid = 190;          // pot variable for calibrate bidirectional
 int pot_lock = 250;         // pot value for lock
@@ -66,7 +70,10 @@ int gc = 30;                // global counter for door timeout
 int led_cool[2] = {255, 0}; // additional led brightness control
 byte input;                 // input variable from XBee
 bool obj_status = false;    // object detection
-
+bool buzzer_toggle = true;  // buzzer switch to turn tones on and off
+bool online_toggle = true;  // internet switch to turn net control on and off
+bool master_toggle = true;  // master switch to turn system on and off
+bool lock_toggle   = true;  // lock control toggle
 
 // Servo Object
 Servo door;
@@ -77,16 +84,25 @@ void setup(){
     XBee.begin(9600);
     
     pinMode(door_pin,   INPUT);
-    pinMode(trig_pin,   OUTPUT);
+    pinMode(xbee_buzz,  INPUT);
+    pinMode(xbee_net,   INPUT);
+    pinMode(xbee_master,INPUT);
+    pinMode(xbee_locc,  INPUT);
     pinMode(echo_pin,   INPUT);
+    pinMode(trig_pin,   OUTPUT);
     pinMode(buzzer_pin, OUTPUT);
     pinMode(buzzer_gnd, OUTPUT);
     pinMode(xbee_door,  OUTPUT);
-    pinMode(xbee_obj,  OUTPUT);
-    pinMode(led_pin,    OUTPUT);  
-    digitalWrite(buzzer_gnd, LOW);
+    pinMode(xbee_obj,   OUTPUT);
+    pinMode(xbee_lock,  OUTPUT);
+    digitalWrite(buzzer_gnd,    LOW);       // pseudo gnd
+    digitalWrite(echo_pin,      HIGH);      // turn on pullup resistors
+    digitalWrite(door_pin,      HIGH);      // turn on pullup resistors
+    digitalWrite(xbee_buzz,     HIGH);      // turn on pullup resistors
+    digitalWrite(xbee_net,      HIGH);      // turn on pullup resistors
+    digitalWrite(xbee_master,   HIGH);      // turn on pullup resistors
+    digitalWrite(xbee_locc,     HIGH);      // turn on pullup resistors
     
-    melody_tone();
     calibrate();    // Calibrates the definitions of the potentiometer values
     if (pot_unlock > 475) calibrate();
 
@@ -95,9 +111,14 @@ void setup(){
 
 // Main program loop
 void loop() {
-    serial_monitor();
-    range_detector();
-    door_timeout();
+    if (master_toggle){
+        if (online_toggle){
+            serial_monitor();
+            xbee_unlock();
+        }
+        range_detector();
+        door_timeout();
+    }
     xbee_update();
     delay(RUN_WAIT); // Run again in RUN_WAIT ms
 }
@@ -127,11 +148,11 @@ void serial_monitor(){
                     }
                 }
             } else if ( input == '2' ){
-                stat = lock_status();
+                lock_status = lock_stat();
                 print_info();
-                if (stat == 1) {
+                if (lock_status == 1) {
                     XBee.println("LOCKED");
-                } else if (stat == 0){
+                } else if (lock_status == 0){
                     XBee.println("UNLOCKED");
                 } else {
                     XBee.println("ERROR");
@@ -151,6 +172,30 @@ void serial_monitor(){
     }
 }
 
+void xbee_unlock(){
+    if (lock_toggle == true && digitalRead(xbee_locc) == 0){ // try to unlock 
+        if (lock(0) != 0) {
+            XBee.println("ERROR: Could not execute command UNLOCK.");
+            errorTone();
+            delay(ERR_WAIT);
+            if (lock(0) != 0) {
+                XBee.println("ERROR: Could not execute command UNLOCK twice.");
+                errorTone();
+            }
+        }
+    } else if (lock_toggle == false && digitalRead(xbee_locc) == 1){ // try to lock
+        if (lock(1) != 1) {
+            XBee.println("ERROR: Could not execute command LOCK");
+            errorTone();
+            delay(ERR_WAIT);
+            if (lock(1) != 1) {
+                XBee.println("ERROR: Could not execute command LOCK");
+                errorTone();
+            }
+        }
+    } 
+}
+
 // Returns the position of the door.
 int door_position() {
     door_status = digitalRead(door_pin)?true:false; 
@@ -158,14 +203,16 @@ int door_position() {
 }
 
 void calibrate() {
-  if (analogRead(pot_pin) < pot_mid) {
-    calibrate_unlock();
-    calibrate_lock();
-  } else {
-    calibrate_lock();
-    calibrate_unlock();
-    calibrate_lock();
-  }
+    if (buzzer_toggle)
+        melody_tone();
+    if (analogRead(pot_pin) < pot_mid) {
+        calibrate_unlock();
+        calibrate_lock();
+    } else {
+        calibrate_lock();
+        calibrate_unlock();
+        calibrate_lock();
+    }
 }
 
 void calibrate_unlock () {
@@ -205,7 +252,7 @@ void calibrate_lock () {
  * 5.)   If the lock is in an indeterminate state then return -1
  *
  ******************************************************************************/
-int lock_status() {
+int lock_stat() {
     int rv = -1;
     
     delay(STAT_WAIT);              // prevent it from reading bad value
@@ -244,6 +291,20 @@ void print_info() {
     XBee.println(pot_unlock);
     XBee.print("pot_lock: ");
     XBee.println(pot_lock);
+    XBee.print("lock_status: ");
+    XBee.println(lock_status);
+    XBee.print("door_status: "); 
+    XBee.println(door_status); 
+    XBee.print("obj_status: "); 
+    XBee.println(obj_status); 
+    XBee.print("buzzer_toggle: "); 
+    XBee.println(buzzer_toggle); 
+    XBee.print("online_toggle: "); 
+    XBee.println(online_toggle); 
+    XBee.print("master_toggle: "); 
+    XBee.println(master_toggle); 
+    XBee.print("lock_toggle: "); 
+    XBee.println(lock_toggle); 
 
 }
 
@@ -261,7 +322,7 @@ void print_info() {
  ******************************************************************************/
 int lock(int lock_pos) {
 
-    int l_status = lock_status();
+    int l_status = lock_stat();
     int angle;
     
     if (lock_pos == 1) {
@@ -289,16 +350,18 @@ int lock(int lock_pos) {
     if (angle == LOCK) {
         door.attach(9);
         door.write(LOCK);
-        locktone();
+        if (buzzer_toggle)
+            locktone();
     } else {
         door.attach(9);
         door.write(UNLOCK);
-        unlocktone();
+        if (buzzer_toggle)
+            unlocktone();
     }
     delay(AFT_WAIT);
     // Detach servo so manual override of the door can take place
     door.detach();
-    return lock_status();
+    return lock_stat();
 }
 
 void range_detector() {
@@ -331,13 +394,15 @@ void range_detector() {
         } else {
             XBee.println("Solid object detected");      // unlock the door
             obj_status = true;
-            if (lock(0) != 0) {
-                XBee.println("ERROR: Could not execute command UNLOCK");
-                errorTone();
-                delay(ERR_WAIT);
+            if (lock_stat() == 1){ 
                 if (lock(0) != 0) {
                     XBee.println("ERROR: Could not execute command UNLOCK");
                     errorTone();
+                    delay(ERR_WAIT);
+                    if (lock(0) != 0) {
+                        XBee.println("ERROR: Could not execute command UNLOCK");
+                        errorTone();
+                    }
                 }
             }
             delay(AFT_WAIT);
@@ -352,7 +417,8 @@ void door_timeout(){
         gc = 20;
     }
     // check if the door is unlocked. 
-    if (lock_status() != 1){
+    lock_status = lock_stat();
+    if (lock_status != 1){
         
     // lock it after about 12 (30*0.4) seconds 
     // if no more interaction detected.
@@ -369,20 +435,13 @@ void door_timeout(){
 void xbee_update(){
     digitalWrite(xbee_door, door_status);
     digitalWrite(xbee_obj, obj_status);
-//  if (digitalRead(XBeeIn) == 0){
-//    if (lock(1) != 1) {
-//      XBee.println("ERROR: Could not execute command LOCK");
-//      errorTone();
-//      delay(ERR_WAIT);
-//    }
-//  }else if (digitalRead(XBeeIn) == 1){
-//    if (lock(0) != 0) {
-//      XBee.println("ERROR: Could not execute command UNLOCK");
-//      errorTone();
-//      delay(ERR_WAIT);
-//    }
-//  }
+    digitalWrite(xbee_lock, lock_status);
+    buzzer_toggle = digitalRead(xbee_buzz)?true:false;
+    online_toggle = digitalRead(xbee_net)?true:false;
+    master_toggle = digitalRead(xbee_master)?true:false;
+    lock_toggle = digitalRead(xbee_locc)?true:false;
 }
+
 void melody_tone() {
     // notes in the melody:
     int melody[] = {
