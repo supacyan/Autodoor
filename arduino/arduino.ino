@@ -16,14 +16,14 @@ SoftwareSerial XBee(2, 3); // RX, TX
 
 // Lock angle definitions (Positional Rotation Servo has a range of 0-180 degree)
 // Need to eyeball the angle: 0 to 180 direction is clockwise
-#define LOCK            35
+#define LOCK            30
 #define UNLOCK          160
 
 // Time Definitions
 #define SYS_WAIT	1000        // Short pause to allow system to catch up	
 #define RUN_WAIT	400         // Time to wait before starting loop again
-#define CAL_WAIT	1500        // Time to wait for the calibrator
-#define DSR_WAIT	500         // Delay before locking after the door sensor is triggered
+#define CAL_WAIT	1200        // Time to wait for the calibrator
+#define CAI_WAIT	200         // Time to wait between each calibration
 #define AFT_WAIT	1000        // Time to wait to allow doorlock to complete its task
 #define ERR_WAIT	1000        // Time to wait to redo after ERROR
 #define STAT_WAIT	100         // Time to wait to redo befor read the pot in lock_stat()
@@ -61,14 +61,13 @@ int xbee_locc = 7;          // XBee ctrl pin   DI11 xbee_pin 07
 // Variable declearation
 int lock_status;            // Variable for lock status
 int pot_val = -1;           // variable to read the value from the analog pin 
-int pot_mid = 190;          // pot variable for calibrate bidirectional
+int pot_mid = 300;          // pot variable for calibrate bidirectional
 int pot_lock = 250;         // pot value for lock (value does not matter)
 int pot_unlock = 0;         // pot value for unlock (value does not matter)
-int pot_tole = 100;         // pot tolerance in 0 - 250 (range for 100 degree so)
+int pot_tole = 50;          // pot tolerance in 0 - 100 (100 degree = 250)
 int duration, distance;     // Ultrasonic unlock sensor
 bool door_status = true;    // door detector value
 int gc = 30;                // global counter for door timeout
-int led_cool[2] = {255, 0}; // additional led brightness control
 byte input;                 // input variable from XBee
 bool obj_status = false;    // object detection
 bool buzzer_toggle = true;  // buzzer switch to turn tones on and off
@@ -105,7 +104,7 @@ void setup(){
     digitalWrite(xbee_locc,     HIGH);      // turn on pullup resistors
     
     calibrate();    // Calibrates the definitions of the potentiometer values
-    if (pot_unlock > 475) calibrate();
+    if (pot_unlock > 475 || pot_lock < 100) calibrate();
 
     delay(SYS_WAIT);
 }
@@ -214,6 +213,8 @@ void calibrate() {
         calibrate_unlock();
         calibrate_lock();
     }
+    pot_mid = (pot_unlock+pot_lock)/2;
+    print_info();
 }
 
 void calibrate_unlock () {
@@ -222,6 +223,7 @@ void calibrate_unlock () {
     door.write(UNLOCK);
     delay(CAL_WAIT);
     door.detach();
+    delay(CAI_WAIT);
     // read the value of the potentiometer
     pot_unlock = analogRead(pot_pin); 
     // print out the value to the XBee monitor
@@ -235,6 +237,7 @@ void calibrate_lock () {
     door.write(LOCK);
     delay(CAL_WAIT);
     door.detach();
+    delay(CAI_WAIT);
     // read the value of the potentiometer
     pot_lock = analogRead(pot_pin); 
     // print out the value to the XBee monitor
@@ -259,7 +262,7 @@ int lock_stat() {
     delay(STAT_WAIT);              // prevent it from reading bad value
     pot_val = analogRead(pot_pin); // read the value of the potentiometer
 
-    if(pot_val > 200 && pot_val < (pot_lock + pot_tole)){
+    if(pot_val > (pot_lock - pot_tole) && pot_val < (pot_lock + pot_tole)){
         rv = 1;
     } else if(pot_val > (pot_unlock - pot_tole) && pot_val < (pot_unlock + pot_tole)) {
         rv = 0;
@@ -292,20 +295,22 @@ void print_info() {
     XBee.println(pot_unlock);
     XBee.print("pot_lock: ");
     XBee.println(pot_lock);
-    XBee.print("lock_status: ");
-    XBee.println(lock_status);
-    XBee.print("door_status: "); 
-    XBee.println(door_status); 
-    XBee.print("obj_status: "); 
-    XBee.println(obj_status); 
-    XBee.print("buzzer_toggle: "); 
-    XBee.println(buzzer_toggle); 
-    XBee.print("online_toggle: "); 
-    XBee.println(online_toggle); 
-    XBee.print("master_toggle: "); 
-    XBee.println(master_toggle); 
-    XBee.print("lock_toggle: "); 
-    XBee.println(lock_toggle); 
+    XBee.print("pot_mid: ");
+    XBee.println(pot_mid);
+    // XBee.print("lock_status: ");
+    // XBee.println(lock_status);
+    // XBee.print("door_status: "); 
+    // XBee.println(door_status); 
+    // XBee.print("obj_status: "); 
+    // XBee.println(obj_status); 
+    // XBee.print("buzzer_toggle: "); 
+    // XBee.println(buzzer_toggle); 
+    // XBee.print("online_toggle: "); 
+    // XBee.println(online_toggle); 
+    // XBee.print("master_toggle: "); 
+    // XBee.println(master_toggle); 
+    // XBee.print("lock_toggle: "); 
+    // XBee.println(lock_toggle); 
 
 }
 
@@ -322,10 +327,8 @@ void print_info() {
  *
  ******************************************************************************/
 int lock(int lock_pos) {
-
     int l_status = lock_stat();
-    int angle;
-    
+
     if (lock_pos == 1) {
         XBee.println("----LOCKING----");
     } else if (lock_pos == 0) {
@@ -337,60 +340,52 @@ int lock(int lock_pos) {
     // Read the position of the lock currently
     if (l_status == lock_pos) {
         XBee.println("ALREADY ins desired state.");
-        return lock_pos;
+        return l_status;
     } else {
-        //print_info();
         if (lock_pos == 1) {
-            angle = LOCK;
+            door.attach(9);
+            door.write(LOCK);
+            if (buzzer_toggle)
+                locktone();
         } else if (lock_pos == 0) {
-            angle = UNLOCK;
+            door.attach(9);
+            door.write(UNLOCK);
+            if (buzzer_toggle)
+                unlocktone();
         }
+        delay(AFT_WAIT);
+        // Detach servo so manual override of the door can take place
+        door.detach();
     }
-
-    // set the servo position  
-    if (angle == LOCK) {
-        door.attach(9);
-        door.write(LOCK);
-        if (buzzer_toggle)
-            locktone();
-    } else {
-        door.attach(9);
-        door.write(UNLOCK);
-        if (buzzer_toggle)
-            unlocktone();
-    }
-    delay(AFT_WAIT);
-    // Detach servo so manual override of the door can take place
-    door.detach();
     return lock_stat();
 }
 
 void range_detector() {
     // Get the distance value from the ultrasonic sensor
     // issue : the first value will be really small
-    digitalWrite(trig_pin, HIGH);         // transmit sound wave out
-    delayMicroseconds(10);             	 // transmit last 10 uS
-    digitalWrite(trig_pin, LOW);          // stop transmit
-    duration = pulseIn(echo_pin, HIGH);   // read from echo pin for travel duration
-    distance = (duration/2) / 29.1;      // calculate distance
+    digitalWrite(trig_pin, HIGH);           // transmit sound wave out
+    delayMicroseconds(10);              	// transmit last 10 uS
+    digitalWrite(trig_pin, LOW);            // stop transmit
+    duration = pulseIn(echo_pin, HIGH);     // read from echo pin for travel duration
+    distance = (duration/2) / 29.1;         // calculate distance
     // trying to solve the issue above
     
     if ( gc == 30 )
-        distance = 15;
+        distance = 20;
 
-    if (distance >= 15 || distance <= 0){
+    if (distance >= 20 || distance <= 0){
         obj_status = false;
     } else {
         XBee.println("Object detected");      // Noise
-        
         // make sure there is a solid object;
+        delayMicroseconds(10000);             // wait for 10 ms to read again 
         digitalWrite(trig_pin, HIGH);         // transmit sound wave out
         delayMicroseconds(10);                // transmit last 10 uS
         digitalWrite(trig_pin, LOW);          // stop transmit
         duration = pulseIn(echo_pin, HIGH);   // read from echo pin for travel duration
-        distance = (duration/2) / 29.1;      // calculate distance
+        distance = (duration/2) / 29.1;       // calculate distance
 
-        if (distance >= 15 || distance <= 0){
+        if (distance >= 30 || distance <= 0){
             obj_status = false;
         } else {
             XBee.println("Solid object detected");      // unlock the door
