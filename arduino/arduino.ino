@@ -66,6 +66,7 @@ int pot_lock = 250;         // pot value for lock (value does not matter)
 int pot_unlock = 0;         // pot value for unlock (value does not matter)
 int pot_tole = 50;          // pot tolerance in 0 - 100 (100 degree = 250)
 int duration, distance;     // Ultrasonic unlock sensor
+int dis_cm = 10;            // Ultrasonic detection distance
 bool door_status = true;    // door detector value
 int gc = 30;                // global counter for door timeout
 byte input;                 // input variable from XBee
@@ -371,9 +372,9 @@ void range_detector() {
     // trying to solve the issue above
     
     if ( gc == 30 )
-        distance = 20;
+        distance = dis_cm;
 
-    if (distance >= 20 || distance <= 0){
+    if (distance >= dis_cm || distance <= 0){
         obj_status = false;
     } else {
         XBee.println("Object detected");      // Noise
@@ -385,7 +386,7 @@ void range_detector() {
         duration = pulseIn(echo_pin, HIGH);   // read from echo pin for travel duration
         distance = (duration/2) / 29.1;       // calculate distance
 
-        if (distance >= 30 || distance <= 0){
+        if (distance >= dis_cm || distance <= 0){
             obj_status = false;
         } else {
             XBee.println("Solid object detected");      // unlock the door
